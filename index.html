@@ -272,6 +272,11 @@
                 classElement.textContent = `New Group ${groupNumber}`;
                 newGroup.appendChild(classElement);
                 
+                // Add Discipline element
+                const disciplineElement = this.xmlDoc.createElement('Discipline');
+                disciplineElement.textContent = 'Singel';
+                newGroup.appendChild(disciplineElement);
+                
                 // Add empty Persons element
                 const persons = this.xmlDoc.createElement('Persons');
                 newGroup.appendChild(persons);
@@ -343,14 +348,24 @@
 
                     tr.addEventListener('dragstart', (e) => {
                         tr.classList.add('dragging');
-                        this.selectedSkaters.clear();
-                        this.selectedSkaters.add(person);
-                        tbody.querySelectorAll('tr').forEach(row => row.classList.remove('selected'));
-                        tr.classList.add('selected');
+                        // Only clear selection if clicked row isn't already selected
+                        if (!tr.classList.contains('selected')) {
+                            this.selectedSkaters.clear();
+                            this.selectedSkaters.add(person);
+                            tbody.querySelectorAll('tr').forEach(row => row.classList.remove('selected'));
+                            tr.classList.add('selected');
+                        }
+                        // Mark all selected rows as dragging
+                        tbody.querySelectorAll('tr.selected').forEach(row => {
+                            row.classList.add('dragging');
+                        });
                     });
 
                     tr.addEventListener('dragend', () => {
-                        tr.classList.remove('dragging');
+                        // Remove dragging class from all rows
+                        tbody.querySelectorAll('tr').forEach(row => {
+                            row.classList.remove('dragging');
+                        });
                         this.groupsList.querySelectorAll('.group-item').forEach(item => {
                             item.classList.remove('drag-over');
                         });
