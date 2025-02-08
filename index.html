@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Figure Skating Competition Editor</title>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="control-panel">
+        <input type="file" id="fileInput" accept=".xml">
+        <button id="saveButton" disabled>Save XML</button>
+        <input type="search" id="searchInput" class="search-input" placeholder="Search by name...">
+    </div>
+    <div class="container">
+        <div class="left-panel">
+            <div class="control-panel">
+                <button id="addGroupBtn">Add Group</button>
+                <button id="removeGroupBtn" disabled>Remove Group</button>
+            </div>
+            <div class="groups-list" id="groupsList"></div>
+        </div>
+        <div class="right-panel">
+            <table id="skatersTable">
+                <thead>
+                    <tr>
+                        <th data-col="firstname">First Name</th>
+                        <th data-col="surname">Last Name</th>
+                        <th data-col="birthdate">Birth Date</th>
+                        <th data-col="sex">Sex</th>
+                        <th data-col="district">District</th>
+                        <th data-col="club">Club</th>
+                        <th data-col="nationality">Nationality</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </div>
+    <div id="contextMenu" class="context-menu">
+        <div class="context-menu-item" id="moveToGroup">
+            Move to Group
+            <div class="submenu" id="groupSubmenu"></div>
+        </div>
+    </div>
+    <div id="groupContextMenu" class="context-menu">
+        <div class="context-menu-item" id="renameGroup">Rename Group</div>
+    </div>
+
+    <script>
+        class CompetitionEditor {
+            constructor() {
+                this.xmlDoc = null;
+                this.selectedGroup = null;
+                this.selectedSkaters = new Set();
+                this.currentSort = {
+                    column: null,
+                    isAsc: true
+                };
+                
+                this.initializeUI();
+                this.setupEventListeners();
+            }
+
+            initializeUI() {
+                this.fileInput = document.getElementById('fileInput');
+                this.saveButton = document.getElementById('saveButton');
+                this.groupsList = document.getElementById('groupsList');
+                this.skatersTable = document.getElementById('skatersTable');
+                this.contextMenu = document.getElementById('contextMenu');
+                this.groupSubmenu = document.getElementById('groupSubmenu');
+                this.groupContextMenu = document.getElementById('groupContextMenu');
+                this.addGroupBtn = document.getElementById('addGroupBtn');
+                this.removeGroupBtn = document.getElementById('removeGroupBtn');
+                this.searchInput = document.getElementById('searchInput');
+            }
+
+            setupEventListeners() {
+                this.addGroupBtn.addEventListener('click', this.addGroup.bind(this));
+                this.removeGroupBtn.addEventListener('click', this.removeGroup.bind(this));
+                this.fileInput.addEventListener('change', this.handleFileSelect.bind(this));
+                this.saveButton.addEventListener('click', this.saveXML.bind(this));
+                this.searchInput.addEventListener('input', () => this.renderSkaters());
+                
+                // Table sorting
+                this.skatersTable.querySelector('thead').addEventListener('click', (e) => {
+                    const th = e.target.closest('th');
+                    if (th) this.sortTable(th);
+                });
+
+                // Setup drag and drop for groups
+                this.groupsList.addEventListener('dragover', e => {
+                    e.preventDefault();
+                    const groupItem = e.target.closest('.group-item');
+                    if (!groupItem) return;
+                    
+                    this.groupsList.querySelectorAll('.group-item').forEach(item => {
+                        item.classList.remove('drag-over');
+                    });
+                    groupItem.classList.add('drag-over');
+                });
+
+                this.groupsList.addEventListener('dragleave', e => {
+                    const groupItem = e.target.closest('.group-item');
+                    if (groupItem) {
+                        groupItem.classList.remove('drag-over');
+                    }
+                });
+
+                this.groupsList.addEventListener('drop', e => {
+                    e.preventDefault();
+                    const groupItem = e.target.closest('.group-item');
+                    if (!groupItem) return;
+                    
+                    groupItem.classList.remove('drag-over');
+                    const groupName = groupItem.textContent.replace(/ \(\d+\)$/, '');
+                    const targetGroup = Array.from(this.xmlDoc.querySelectorAll('ClassDiscipline'))
+                        .find(cd => cd.querySelector('Class').textContent === groupName);
+                    
+                    if (targetGroup && targetGroup !== this.selectedGroup) {
+                        this.moveSkaters(targetGroup);
+                    }
+                });
+
+                // Context menu
+                document.addEventListener('click', () => {
+                    this.contextMenu.style.display = 'none';
+                    this.groupSubmenu.style.display = 'none';
+                    this.groupContextMenu.style.display = 'none';
+                });
+
+                document.getElementById('moveToGroup').addEventListener('mouseover', () => {
+                    this.groupSubmenu.style.display = 'block';
+                });
+
+                // Setup group right-click menu
+                this.groupsList.addEventListener('contextmenu', (e) => {
+                    const groupItem = e.target.closest('.group-item');
+                    if (!groupItem) return;
+                    
+                    e.preventDefault();
+                    this.groupContextMenu.style.display = 'block';
+                    this.groupContextMenu.style.left = e.pageX + 'px';
+                    this.groupContextMenu.style.top = e.pageY + 'px';
+                });
+
+                document.getElementById('renameGroup').addEventListener('click', () => {
+                    if (!this.selectedGroup) return;
+                    const groupName = this.selectedGroup.querySelector('Class').textContent;
+                    const groupItem = Array.from(this.groupsList.children)
+                        .find(item => item.textContent.replace(/ \(\d+\)$/, '') === groupName.replace(/ \(\d+\)$/, ''));
+                    
+                    if (groupItem) {
+                        this.initiateRename(groupItem, groupName);
+                    }
+                });
+
+                this.skatersTable.addEventListener('contextmenu', this.handleContextMenu.bind(this));
+            }
+
+            async handleFileSelect(event) {
+                const file = event.target.files[0];
+                if (!file) return;
+
+                try {
+                    const text = await file.text();
+                    const parser = new DOMParser();
+                    this.xmlDoc = parser.parseFromString(text, 'application/xml');
+                    
+                    this.saveButton.disabled = false;
+                    this.renderGroups();
+                } catch (error) {
+                    console.error('Error loading file:', error);
+                    alert('Error loading file');
+                }
+            }
+
+            renderGroups() {
+                            this.groupsList.innerHTML = '';
+                            // Convert NodeList to Array and sort by Class name
+                            const classDisciplines = Array.from(this.xmlDoc.querySelectorAll('ClassDiscipline'))
+                                .sort((a, b) => {
+                                    const aName = a.querySelector('Class').textContent;
+                                    const bName = b.querySelector('Class').textContent;
+                                    return aName.localeCompare(bName);
+                                });
+                            
+                            classDisciplines.forEach(cd => {
+                    const className = cd.querySelector('Class').textContent;
+                    const personCount = cd.querySelectorAll('Person').length;
+                    const div = document.createElement('div');
+                    div.className = 'group-item';
+                    div.textContent = `${className} (${personCount})`;
+                    div.addEventListener('click', () => this.selectGroup(cd));
+                    this.groupsList.appendChild(div);
+                });
+
+                if (classDisciplines.length > 0) {
+                    this.selectGroup(classDisciplines[0]);
+                }
+            }
+
+            selectGroup(groupElement) {
+                this.selectedGroup = groupElement;
+                
+                // Update UI
+                const selectedClassName = groupElement.querySelector('Class').textContent;
+                this.groupsList.querySelectorAll('.group-item').forEach(item => {
+                    item.classList.remove('selected');
+                    const itemName = item.textContent.replace(/ \(\d+\)$/, '');
+                    if (itemName === selectedClassName) {
+                        item.classList.add('selected');
+                    }
+                });
+
+                this.renderSkaters();
+                this.removeGroupBtn.disabled = !this.selectedGroup;
+            }
+
+            initiateRename(groupItem, groupName) {
+                const input = document.createElement('input');
+                input.type = 'text';
+                input.value = groupName.replace(/ \(\d+\)$/, '');
+                input.className = 'rename-input';
+                
+                const originalContent = groupItem.innerHTML;
+                groupItem.innerHTML = '';
+                groupItem.appendChild(input);
+                input.focus();
+                input.select();
+
+                const handleRename = () => {
+                    const newName = input.value.trim();
+                    if (newName && newName !== groupName) {
+                        this.selectedGroup.querySelector('Class').textContent = newName;
+                        this.renderGroups();
+                        this.selectGroup(this.selectedGroup);
+                    } else {
+                        groupItem.innerHTML = originalContent;
+                    }
+                };
+
+                input.addEventListener('blur', handleRename);
+                input.addEventListener('keyup', (e) => {
+                    if (e.key === 'Enter') handleRename();
+                    if (e.key === 'Escape') groupItem.innerHTML = originalContent;
+                });
+            }
+
+            addGroup() {
+                if (!this.xmlDoc) return;
+
+                // Create new ClassDiscipline element
+                const newGroup = this.xmlDoc.createElement('ClassDiscipline');
+                
+                // Add Class element
+                const classElement = this.xmlDoc.createElement('Class');
+                const groupNumber = this.xmlDoc.querySelectorAll('ClassDiscipline').length + 1;
+                classElement.textContent = `New Group ${groupNumber}`;
+                newGroup.appendChild(classElement);
+                
+                // Add empty Persons element
+                const persons = this.xmlDoc.createElement('Persons');
+                newGroup.appendChild(persons);
+
+                // Add empty Officials element
+                const officials = this.xmlDoc.createElement('Officials');
+                newGroup.appendChild(officials);
+                
+                // Append new group under IndTAEntries->ClassDisciplines->ClassDiscipline
+                const root = this.xmlDoc.documentElement; // expected to be "IndTAEntries"
+                let classDisciplines = root.querySelector('ClassDisciplines');
+                if (!classDisciplines) {
+                    classDisciplines = this.xmlDoc.createElement('ClassDisciplines');
+                    root.appendChild(classDisciplines);
+                }
+                classDisciplines.appendChild(newGroup);
+                
+                this.renderGroups();
+                this.selectGroup(newGroup);
+
+                // Automatically initiate rename for the new group
+                const groupName = classElement.textContent;
+                const groupItem = Array.from(this.groupsList.children)
+                    .find(item => item.textContent.replace(/ \(\d+\)$/, '') === groupName.replace(/ \(\d+\)$/, ''));
+                if (groupItem) {
+                    this.initiateRename(groupItem, groupName);
+                }
+            }
+
+            removeGroup() {
+                if (!this.selectedGroup) return;
+                
+                const confirmed = confirm('Are you sure you want to remove this group?');
+                if (!confirmed) return;
+
+                this.selectedGroup.parentNode.removeChild(this.selectedGroup);
+                this.selectedGroup = null;
+                this.removeGroupBtn.disabled = true;
+                this.renderGroups();
+            }
+
+            renderSkaters() {
+                const tbody = this.skatersTable.querySelector('tbody');
+                tbody.innerHTML = '';
+                this.selectedSkaters.clear();
+                this.lastClickedRow = null;
+
+                const searchTerm = this.searchInput.value.toLowerCase();
+                const persons = Array.from(this.selectedGroup.querySelectorAll('Person')).filter(person => {
+                    const firstName = person.querySelector('FirstName').textContent.toLowerCase();
+                    const lastName = person.querySelector('SurName').textContent.toLowerCase();
+                    return firstName.includes(searchTerm) || lastName.includes(searchTerm);
+                });
+                
+                persons.forEach(person => {
+                    const tr = document.createElement('tr');
+                    tr.draggable = true;
+                    // Attach XML Person object to row
+                    tr.personObj = person;
+                    tr.innerHTML = `
+                        <td>${person.querySelector('FirstName').textContent}</td>
+                        <td>${person.querySelector('SurName').textContent}</td>
+                        <td>${person.querySelector('BirthDate').textContent}</td>
+                        <td>${person.querySelector('Sex').textContent}</td>
+                        <td>${person.querySelector('District DistrictName').textContent}</td>
+                        <td>${person.querySelector('Organization OrganizationName').textContent}</td>
+                        <td>${person.querySelector('Nationality').textContent}</td>
+                    `;
+
+                    tr.addEventListener('dragstart', (e) => {
+                        tr.classList.add('dragging');
+                        this.selectedSkaters.clear();
+                        this.selectedSkaters.add(person);
+                        tbody.querySelectorAll('tr').forEach(row => row.classList.remove('selected'));
+                        tr.classList.add('selected');
+                    });
+
+                    tr.addEventListener('dragend', () => {
+                        tr.classList.remove('dragging');
+                        this.groupsList.querySelectorAll('.group-item').forEach(item => {
+                            item.classList.remove('drag-over');
+                        });
+                    });
+
+                    tr.addEventListener('click', (e) => {
+                        if (!e.ctrlKey && !e.shiftKey) {
+                            this.selectedSkaters.clear();
+                            tbody.querySelectorAll('tr').forEach(row => row.classList.remove('selected'));
+                        }
+
+                        if (e.shiftKey && this.lastClickedRow) {
+                            const rows = Array.from(tbody.querySelectorAll('tr'));
+                            const currentIndex = rows.indexOf(tr);
+                            const lastIndex = rows.indexOf(this.lastClickedRow);
+                            const start = Math.min(currentIndex, lastIndex);
+                            const end = Math.max(currentIndex, lastIndex);
+
+                            for (let i = start; i <= end; i++) {
+                                rows[i].classList.add('selected');
+                                // Use the attached person object from the row
+                                this.selectedSkaters.add(rows[i].personObj);
+                            }
+                        } else {
+                            tr.classList.toggle('selected');
+                            if (tr.classList.contains('selected')) {
+                                this.selectedSkaters.add(person);
+                            } else {
+                                this.selectedSkaters.delete(person);
+                            }
+                            this.lastClickedRow = tr;
+                        }
+                    });
+
+                    tbody.appendChild(tr);
+                });
+
+                // Apply current sort if exists
+                this.applySort(tbody);
+            }
+
+            handleContextMenu(e) {
+                if (this.selectedSkaters.size === 0) return;
+                
+                e.preventDefault();
+                
+                // Position context menu
+                this.contextMenu.style.display = 'block';
+                
+                // Calculate available space
+                const viewportWidth = window.innerWidth;
+                const viewportHeight = window.innerHeight;
+                
+                // Initial position
+                let menuLeft = e.pageX;
+                let menuTop = e.pageY;
+                
+                // Ensure the menu doesn't go off the right edge
+                if (menuLeft + this.contextMenu.offsetWidth > viewportWidth) {
+                    menuLeft = viewportWidth - this.contextMenu.offsetWidth - 10;
+                }
+                
+                // Ensure the menu doesn't go off the bottom edge
+                if (menuTop + this.contextMenu.offsetHeight > viewportHeight) {
+                    menuTop = viewportHeight - this.contextMenu.offsetHeight - 10;
+                }
+                
+                this.contextMenu.style.left = menuLeft + 'px';
+                this.contextMenu.style.top = menuTop + 'px';
+
+                // Update submenu
+                this.groupSubmenu.innerHTML = '';
+                const classDisciplines = this.xmlDoc.querySelectorAll('ClassDiscipline');
+                
+                // Add event listener to handle submenu positioning
+                this.contextMenu.querySelector('#moveToGroup').addEventListener('mouseenter', () => {
+                    const moveToGroupRect = this.contextMenu.querySelector('#moveToGroup').getBoundingClientRect();
+                    const viewportWidth = window.innerWidth;
+                    const viewportHeight = window.innerHeight;
+                    
+                    // Position submenu at the right side of the parent menu item by default
+                    let left = moveToGroupRect.right;
+                    let top = moveToGroupRect.top;
+                    
+                    // Check if submenu would go off the right edge
+                    if (left + this.groupSubmenu.offsetWidth > viewportWidth) {
+                        // Position to the left of the parent menu item instead
+                        left = moveToGroupRect.left - this.groupSubmenu.offsetWidth;
+                    }
+                    
+                    // Check if submenu would go off the bottom
+                    if (top + this.groupSubmenu.offsetHeight > viewportHeight) {
+                        // Align bottom of submenu with bottom of viewport
+                        top = viewportHeight - this.groupSubmenu.offsetHeight - 10;
+                    }
+                    
+                    // Apply the calculated position
+                    this.groupSubmenu.style.left = Math.max(0, left) + 'px';
+                    this.groupSubmenu.style.top = Math.max(0, top) + 'px';
+                });
+                classDisciplines.forEach(cd => {
+                    if (cd === this.selectedGroup) return;
+                    
+                    const div = document.createElement('div');
+                    div.className = 'context-menu-item';
+                    div.textContent = cd.querySelector('Class').textContent;
+                    div.addEventListener('click', () => this.moveSkaters(cd));
+                    this.groupSubmenu.appendChild(div);
+                });
+            }
+
+            moveSkaters(targetGroup) {
+                const targetPersons = targetGroup.querySelector('Persons');
+                const skaters = Array.from(this.selectedSkaters); // Convert Set to Array to maintain stable order
+                
+                skaters.forEach(person => {
+                    const personClone = person.cloneNode(true);
+                    targetPersons.appendChild(personClone);
+                    person.parentNode.removeChild(person);
+                });
+
+                this.selectedSkaters.clear();
+                const currentGroup = this.selectedGroup;
+                this.renderGroups();
+                this.selectGroup(currentGroup);
+            }
+
+            applySort(tbody) {
+                if (!this.currentSort.column) return;
+                
+                const th = this.skatersTable.querySelector(`th[data-col="${this.currentSort.column}"]`);
+                if (!th) return;
+
+                const columnIndex = Array.from(th.parentElement.children).indexOf(th);
+                const rows = Array.from(tbody.querySelectorAll('tr'));
+                
+                rows.sort((a, b) => {
+                    const aValue = a.children[columnIndex].textContent;
+                    const bValue = b.children[columnIndex].textContent;
+                    return this.currentSort.isAsc ? aValue.localeCompare(bValue) : bValue.localeCompare(aValue);
+                });
+
+                rows.forEach(row => tbody.appendChild(row));
+            }
+
+            sortTable(th) {
+                const column = th.dataset.col;
+                const tbody = this.skatersTable.querySelector('tbody');
+                
+                // Clear all sort indicators
+                th.parentElement.querySelectorAll('th').forEach(header => {
+                    header.classList.remove('sort-asc', 'sort-desc');
+                });
+
+                // Toggle sort direction or set initial sort
+                if (this.currentSort.column === column) {
+                    this.currentSort.isAsc = !this.currentSort.isAsc;
+                } else {
+                    this.currentSort.column = column;
+                    this.currentSort.isAsc = true;
+                }
+                
+                // Add appropriate class
+                th.classList.add(this.currentSort.isAsc ? 'sort-asc' : 'sort-desc');
+
+                this.applySort(tbody);
+            }
+
+            saveXML() {
+                const serializer = new XMLSerializer();
+                const xmlString = serializer.serializeToString(this.xmlDoc);
+                
+                const blob = new Blob([xmlString], { type: 'application/xml' });
+                const url = URL.createObjectURL(blob);
+                
+                // Get original filename and create modified version
+                const originalFilename = this.fileInput.files[0].name;
+                const filenameParts = originalFilename.split('.');
+                const extension = filenameParts.pop();
+                const baseName = filenameParts.join('.');
+                const newFilename = `${baseName}.${extension}`;
+                
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = newFilename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            }
+        }
+
+        // Initialize application
+        new CompetitionEditor();
+    </script>
+</body>
+</html>
