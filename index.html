@@ -9,6 +9,10 @@
 </head>
 <body>
     <div class="control-panel">
+        <!-- Updated title container -->
+        <div class="title-container" style="float: right; text-align: right;">
+            <h3 id="competitionTitle" style="margin: 0; font-size: 1rem;"></h3>
+        </div>
         <input type="file" id="fileInput" accept=".xml">
         <button id="saveButton" disabled>Save XML</button>
         <input type="search" id="searchInput" class="search-input" placeholder="Search by name...">
@@ -74,6 +78,7 @@
                 this.addGroupBtn = document.getElementById('addGroupBtn');
                 this.removeGroupBtn = document.getElementById('removeGroupBtn');
                 this.searchInput = document.getElementById('searchInput');
+                this.competitionTitle = document.getElementById('competitionTitle'); // new reference
             }
 
             setupEventListeners() {
@@ -167,6 +172,13 @@
                     const text = await file.text();
                     const parser = new DOMParser();
                     this.xmlDoc = parser.parseFromString(text, 'application/xml');
+                    
+                    // Update competition title from CompetitionHeader
+                    const compHeader = this.xmlDoc.querySelector('CompetitionHeader');
+                    if (compHeader) {
+                        const compName = compHeader.querySelector('CompetitionName').textContent;
+                        this.competitionTitle.textContent = compName;
+                    }
                     
                     this.saveButton.disabled = false;
                     this.renderGroups();
